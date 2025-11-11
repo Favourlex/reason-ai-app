@@ -1,166 +1,222 @@
-# ================================================
-# 🧠 Reason AI — Universal Data Cleaner
-# + NeuralSeek Console Upload
-# + Fixed Q&A Visualization
-# + Exports cleaned_latest.csv for FastAPI backend
-# ================================================
+# ===========================================================
+# Reason AI — Universal Data Cleaner + Fixed Q&A + NeuralSeek Integration
+# with Navigation, Dashboard & Settings
+# Developed by Favour Ezeofor 👑
+# ===========================================================
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os, re, time
+import os, time, requests
 from io import BytesIO
 from datetime import datetime
-import requests
-from pandas.api.types import is_numeric_dtype
 import matplotlib.pyplot as plt
+from pandas.api.types import is_numeric_dtype
 
-st.set_page_config(page_title="Reason AI - Universal Data Cleaner", layout="wide")
+# ----------------- PAGE CONFIG -----------------
+st.set_page_config(page_title="Reason AI – Universal Data Cleaner",
+                   layout="wide", page_icon="🧠")
 
-# ---------- Header ----------
+# ----------------- HEADER -----------------
 st.markdown("""
-<div style="text-align:left; margin-bottom:20px;">
-  <h1 style="font-size:40px; font-weight:700; margin:0;">🧠 Reason AI</h1>
-  <div style="font-size:18px; color:#444; font-weight:600; margin:2px 0 8px 0;">
-    Developed by <span style="color:#1f77b4;"><b>Favour Ezeofor</b></span>
-  </div>
-  <h2 style="font-size:26px; font-weight:700; margin:0;">Universal Data Cleaning System</h2>
-</div>
+<h1 style="font-size:40px; font-weight:700; text-align:center;">🧠 Reason AI</h1>
+<h3 style="text-align:center;">Universal Data Cleaning & Analysis System</h3>
+<p style="text-align:center;">Developed by <b>Favour Ezeofor 👑</b></p>
 """, unsafe_allow_html=True)
+st.markdown("---")
 
-st.markdown("""
-Upload any **CSV file** — Reason AI will automatically clean it:
+# ----------------- NAVIGATION -----------------
+nav = st.radio("Navigate",
+               ["🧹 Data Cleaner", "📊 Dashboard", "⚙️ Settings"],
+               horizontal=True, label_visibility="collapsed")
+st.markdown("---")
 
-- Remove empty rows/columns  
-- Handle missing values (smart numeric + text)  
-- Detect and normalize dates  
-- Standardize gender markers  
-- Output a clean CSV ready for NeuralSeek ingestion  
-- Generate a full data-quality summary  
-""")
-
-# ---------- Cleaning helpers ----------
+# ----------------- HELPERS -----------------
 NULL_TOKENS = {"", " ", "nan", "none", "null", "n/a", "na", "unknown"}
-
 GENDER_MAP = {
-    "m": "Male", "male": "Male", "man": "Male", "boy": "Male",
-    "f": "Female", "female": "Female", "woman": "Female", "girl": "Female",
-    "others": "Other", "other": "Other", "non-binary": "Other", "nonbinary": "Other",
-    "nb": "Other", "trans": "Other", "transgender": "Other"
+    "m":"Male","male":"Male","man":"Male","boy":"Male",
+    "f":"Female","female":"Female","woman":"Female","girl":"Female",
+    "others":"Other","other":"Other","non-binary":"Other","nb":"Other"
 }
 
-def clean_text_cell(x: str) -> str:
+def clean_text_cell(x):
     if pd.isna(x): return "Unknown"
     s = str(x).strip()
-    return "Unknown" if s.lower() in NULL_TOKENS else s
+    return "Unknown" if s.lower() in NULL_TOKENS else s.title()
 
-def detect_numeric_series(s: pd.Series) -> bool:
-    if is_numeric_dtype(s): return True
-    coerce = pd.to_numeric(s.dropna().astype(str).str.replace(",", ""), errors="coerce")
-    return (coerce.notna().mean() >= 0.7)
+def to_numeric_smart(s):
+    s = s.astype(str).str.replace(r"[₦$,()% ]","",regex=True)
+    return pd.to_numeric(s, errors="coerce")
 
-def to_numeric_smart(s: pd.Series) -> pd.Series:
-    cleaned = (
-        s.astype(str)
-         .str.replace(r"[₦$,()% ]", "", regex=True)
-         .str.replace(r"[^\d\.\-eE]", "", regex=True)
-    )
-    return pd.to_numeric(cleaned, errors="coerce")
+def normalize_date_series(s):
+    d = pd.to_datetime(s, errors="coerce", infer_datetime_format=True)
+    return d.dt.strftime("%Y-%m-%d").fillna("Unknown")
 
-def normalize_date_series(s: pd.Series) -> pd.Series:
-    cleaned = s.astype(str).map(lambda x: x if x.strip().lower() not in NULL_TOKENS else np.nan)
-    parsed = pd.to_datetime(cleaned, errors="coerce", infer_datetime_format=True)
-    out = parsed.dt.strftime("%Y-%m-%d")
-    return out.fillna("Unknown")
-
-def clean_gender_cell(x: str) -> str:
+def clean_gender_cell(x):
     s = str(x).strip().lower()
     if s in NULL_TOKENS: return "Unknown"
     return GENDER_MAP.get(s, "Unknown")
 
 @st.cache_data(show_spinner=False)
-def _read_csv_cached(file_bytes: bytes, name: str):
-    for enc in ("utf-8", "utf-8-sig", "latin-1"):
-        try:
-            return pd.read_csv(BytesIO(file_bytes), encoding=enc), enc
-        except UnicodeDecodeError:
-            continue
+def read_csv(file_bytes):
+    for enc in ("utf-8","utf-8-sig","latin-1"):
+        try: return pd.read_csv(BytesIO(file_bytes), encoding=enc), enc
+        except UnicodeDecodeError: continue
     return pd.read_csv(BytesIO(file_bytes)), "auto"
 
-# ---------- Upload ----------
-uploaded_file = st.file_uploader("📂 Upload your CSV file", type=["csv"])
-if uploaded_file and hasattr(uploaded_file, "size"):
-    mb = uploaded_file.size / (1024*1024)
-    if mb > 100:
-        st.warning(f"⚠️ Large file detected ({mb:.1f} MB). Some steps may take longer.")
+# ===========================================================
+# 1️⃣ DATA CLEANER TAB
+# ===========================================================
+if nav.startswith("🧹"):
+    st.markdown("""
+    Upload any **CSV file** and Reason AI will automatically clean it:
+    - Remove empty rows/columns  
+    - Handle missing values  
+    - Detect and normalize dates  
+    - Standardize gender markers  
+    - Output a ready CSV for NeuralSeek ingestion  
+    """)
 
-if "df_clean" not in st.session_state: st.session_state["df_clean"] = None
+    uploaded = st.file_uploader("📂 Upload your CSV file", type=["csv"])
 
-# ---------- Clean ----------
-if uploaded_file:
-    try:
-        file_bytes = uploaded_file.getvalue()
-        df, enc_used = _read_csv_cached(file_bytes, uploaded_file.name)
-        st.caption(f"📥 Loaded **{uploaded_file.name}** using encoding **{enc_used}**")
-        st.success("✅ File uploaded successfully!")
+    if uploaded:
+        df, enc = read_csv(uploaded.getvalue())
+        st.success(f"✅ Loaded **{uploaded.name}** (encoding: {enc})")
+        rows0, cols0 = df.shape
 
-        rows_before, cols_before = df.shape
-
-        with st.status("🧽 Cleaning in progress...", expanded=False) as status:
-            df.dropna(axis=0, how='all', inplace=True)
+        with st.status("🧽 Cleaning in progress..."):
+            df.dropna(how='all', inplace=True)
             df.dropna(axis=1, how='all', inplace=True)
-            df.columns = [c.strip().replace(" ", "_").replace("-", "_").lower() for c in df.columns]
+            df.columns = [c.strip().lower().replace(" ","_") for c in df.columns]
 
-            missing_filled = 0
-            for col in df.columns:
-                if detect_numeric_series(df[col]):
-                    nums = to_numeric_smart(df[col])
-                    fill_val = nums.median()
-                    missing_filled += nums.isna().sum()
-                    df[col] = nums.fillna(fill_val)
-                    continue
-                if any(k in col for k in ["date", "admission", "discharge", "created", "visit"]):
-                    df[col] = normalize_date_series(df[col]); continue
-                if "gender" in col:
-                    df[col] = df[col].astype(str).map(clean_gender_cell); continue
-                df[col] = df[col].astype(str).map(clean_text_cell)
-                temp_num = to_numeric_smart(df[col])
-                if temp_num.notna().sum() > 0 and temp_num.isna().sum() < len(temp_num)*0.5:
-                    median_val = temp_num.median()
-                    missing_filled += temp_num.isna().sum()
-                    df[col] = temp_num.fillna(median_val)
+            for c in df.columns:
+                if "gender" in c:
+                    df[c] = df[c].astype(str).map(clean_gender_cell)
+                elif "date" in c:
+                    df[c] = normalize_date_series(df[c])
                 else:
-                    df[col] = df[col].apply(lambda x: x.title() if isinstance(x, str) and x.lower() != "unknown" else "Unknown")
+                    df[c] = df[c].astype(str).map(clean_text_cell)
+                    num = to_numeric_smart(df[c])
+                    if num.notna().sum() > len(num)*0.5:
+                        df[c] = num.fillna(num.median())
 
-            dup_count = df.duplicated().sum()
-            df.drop_duplicates(inplace=True)
+        st.success("🎉 Cleaning complete!")
+        st.dataframe(df.head(10), use_container_width=True)
 
-            status.update(label="✅ Cleaning complete", state="complete")
-
-        st.session_state["df_clean"] = df
         os.makedirs("artifacts", exist_ok=True)
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        clean_path = f"artifacts/cleaned_{os.path.splitext(uploaded_file.name)[0]}_{ts}.csv"
-        df.to_csv(clean_path, index=False, encoding="utf-8")
+        path = f"artifacts/cleaned_{os.path.splitext(uploaded.name)[0]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        df.to_csv(path, index=False)
+        df.to_csv("artifacts/cleaned_latest.csv", index=False)
+        st.session_state["df_clean"] = df
+        st.session_state["clean_path"] = path
 
-        # Save a permanent copy for FastAPI backend
-        df.to_csv("artifacts/cleaned_latest.csv", index=False, encoding="utf-8")
+        st.download_button("⬇️ Download Cleaned Dataset",
+                           data=df.to_csv(index=False).encode("utf-8"),
+                           file_name=f"cleaned_{uploaded.name}",
+                           mime="text/csv")
 
-        st.success(f"✅ Cleaned file saved: `{clean_path}` and updated `cleaned_latest.csv` for API use.")
+        st.info("✅ Cleaned file saved and `cleaned_latest.csv` updated for API backend.")
 
-        st.download_button(
-            label="⬇️ Download Cleaned Dataset",
-            data=df.to_csv(index=False).encode("utf-8"),
-            file_name=f"cleaned_{uploaded_file.name}",
-            mime="text/csv"
-        )
+        # ---------- NeuralSeek Console Upload ----------
+        st.markdown("### 🔗 NeuralSeek Console Integration")
+        inst = st.text_input("NeuralSeek Instance ID",
+                             value=st.session_state.get("instance_id","e4826687b7e8c357dfcd1b18"))
+        key  = st.text_input("NeuralSeek API Key",
+                             type="password",
+                             value=st.session_state.get("api_key",""))
 
-    except Exception as e:
-        st.error(f"❌ Error processing file: {e}")
+        if st.button("🚀 Send Cleaned CSV to NeuralSeek"):
+            try:
+                url = f"https://consoleapi-usw.neuralseek.com/{inst}/exploreUpload"
+                headers = {"accept":"*/*","apikey":key}
+                with open(st.session_state["clean_path"],"rb") as f:
+                    files = {"file":(os.path.basename(st.session_state["clean_path"]),f,"text/csv")}
+                    r = requests.post(url, headers=headers, files=files, timeout=120)
+                r.raise_for_status()
+                st.success("✅ Uploaded successfully — check mAIstro → Use Document.")
+            except Exception as e:
+                st.error(f"⚠️ Upload failed: {e}")
 
-# ---------- Footer ----------
-st.markdown("<hr>", unsafe_allow_html=True)
-st.markdown(
-    "<div style='text-align:center; font-size:15px; color:gray;'>"
-    "💡 Developed by <b>Favour Ezeofor</b> — Reason AI"
-    "</div>", unsafe_allow_html=True
-)
+        st.link_button("🔗 Open mAIstro", f"https://console-usw.neuralseek.com/{inst}/maistro#")
+        st.link_button("🔗 Open Seek", f"https://console-usw.neuralseek.com/{inst}/seek#")
+
+
+# ===========================================================
+# 2️⃣ DASHBOARD (Q&A + VISUALIZATION)
+# ===========================================================
+elif nav.startswith("📊"):
+    df = st.session_state.get("df_clean")
+    if df is None or df.empty:
+        st.info("📁 Upload and clean a CSV first to enable Q&A.")
+    else:
+        st.markdown("## 💬 Reason AI — Fixed Q&A (Ask & Visualize)")
+        cols = list(df.columns)
+
+        def find_first(*keys):
+            for c in cols:
+                if any(k in c.lower() for k in keys):
+                    return c
+            return None
+
+        doctor = find_first("doctor","physician","consultant")
+        clinic = find_first("clinic","ward","department")
+        fee = find_first("fee","amount","charge","bill")
+        date = find_first("date","admission","discharge","visit")
+        gender = find_first("gender","sex")
+        age = find_first("age")
+        proc = find_first("procedure","treatment")
+        outcome = find_first("outcome","status","result")
+
+        # Ensure fee numeric
+        if fee: df[fee] = to_numeric_smart(df[fee])
+
+        CATALOG = []
+        if doctor: CATALOG.append(("Top doctors by patient count",
+            lambda: (f"Top doctor: {df[doctor].value_counts().idxmax()}", df[doctor].value_counts(), "bar")))
+        if clinic: CATALOG.append(("Top clinics by patient count",
+            lambda: (f"Top clinic: {df[clinic].value_counts().idxmax()}", df[clinic].value_counts(), "bar")))
+        if fee and doctor: CATALOG.append(("Average fee by doctor (Top 8)",
+            lambda: (f"Highest avg fee: {df.groupby(doctor)[fee].mean().idxmax()}", df.groupby(doctor)[fee].mean().sort_values(ascending=False).head(8), "bar")))
+        if fee and clinic: CATALOG.append(("Average fee by clinic (Top 8)",
+            lambda: (f"Highest avg clinic: {df.groupby(clinic)[fee].mean().idxmax()}", df.groupby(clinic)[fee].mean().sort_values(ascending=False).head(8), "bar")))
+        if date and fee: CATALOG.append(("Monthly revenue (sum of fee)",
+            lambda: (f"Peak month revenue: {pd.to_datetime(df[date],errors='coerce').dt.to_period('M').value_counts().idxmax()}", df.groupby(pd.to_datetime(df[date],errors='coerce').dt.to_period('M'))[fee].sum(), "line")))
+        if gender: CATALOG.append(("Gender distribution",
+            lambda: ("Gender distribution", df[gender].value_counts(), "pie")))
+
+        titles = [t for t,_ in CATALOG]
+        sel = st.selectbox("Choose a question:", titles)
+        ask = st.button("🧩 Ask Question")
+        viz = st.button("📈 Visualize Answer")
+
+        if ask:
+            ans, data, kind = dict(CATALOG)[sel]()
+            st.session_state["ans"]=ans;st.session_state["data"]=data;st.session_state["kind"]=kind
+            st.success(f"**Answer:** {ans}")
+
+        if viz and "data" in st.session_state:
+            data=st.session_state["data"]; kind=st.session_state["kind"]; title=sel
+            fig, ax = plt.subplots(figsize=(8,4))
+            if kind=="bar": data.plot(kind="bar", ax=ax)
+            elif kind=="line": data.plot(ax=ax)
+            elif kind=="pie": ax.pie(data.values, labels=data.index, autopct="%1.1f%%")
+            st.pyplot(fig, use_container_width=True)
+
+
+# ===========================================================
+# 3️⃣ SETTINGS TAB
+# ===========================================================
+else:
+    st.markdown("### ⚙️ App Settings")
+    instance_id = st.text_input("Default NeuralSeek Instance ID",
+                                value=st.session_state.get("instance_id",""))
+    api_key = st.text_input("Default NeuralSeek API Key",
+                            type="password",
+                            value=st.session_state.get("api_key",""))
+    if st.button("💾 Save Settings"):
+        st.session_state["instance_id"]=instance_id
+        st.session_state["api_key"]=api_key
+        st.success("✅ Settings saved for this session.")
+
+st.markdown("<hr><center>💡 Developed by <b>Favour Ezeofor</b> — Reason AI</center>",
+            unsafe_allow_html=True)
