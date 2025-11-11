@@ -34,9 +34,9 @@ st.markdown("---")
 # ----------------- HELPERS -----------------
 NULL_TOKENS = {"", " ", "nan", "none", "null", "n/a", "na", "unknown"}
 GENDER_MAP = {
-    "m":"Male","male":"Male","man":"Male","boy":"Male",
-    "f":"Female","female":"Female","woman":"Female","girl":"Female",
-    "others":"Other","other":"Other","non-binary":"Other","nb":"Other"
+    "m": "Male", "male": "Male", "man": "Male", "boy": "Male",
+    "f": "Female", "female": "Female", "woman": "Female", "girl": "Female",
+    "others": "Other", "other": "Other", "non-binary": "Other", "nb": "Other"
 }
 
 def clean_text_cell(x):
@@ -45,7 +45,7 @@ def clean_text_cell(x):
     return "Unknown" if s.lower() in NULL_TOKENS else s.title()
 
 def to_numeric_smart(s):
-    s = s.astype(str).str.replace(r"[₦$,()% ]","",regex=True)
+    s = s.astype(str).str.replace(r"[₦$,()% ]", "", regex=True)
     return pd.to_numeric(s, errors="coerce")
 
 def normalize_date_series(s):
@@ -59,10 +59,13 @@ def clean_gender_cell(x):
 
 @st.cache_data(show_spinner=False)
 def read_csv(file_bytes):
-    for enc in ("utf-8","utf-8-sig","latin-1"):
-        try: return pd.read_csv(BytesIO(file_bytes), encoding=enc), enc
-        except UnicodeDecodeError: continue
+    for enc in ("utf-8", "utf-8-sig", "latin-1"):
+        try: 
+            return pd.read_csv(BytesIO(file_bytes), encoding=enc), enc
+        except UnicodeDecodeError: 
+            continue
     return pd.read_csv(BytesIO(file_bytes)), "auto"
+
 
 # ===========================================================
 # 1️⃣ DATA CLEANER TAB
@@ -87,7 +90,7 @@ if nav.startswith("🧹"):
         with st.status("🧽 Cleaning in progress..."):
             df.dropna(how='all', inplace=True)
             df.dropna(axis=1, how='all', inplace=True)
-            df.columns = [c.strip().lower().replace(" ","_") for c in df.columns]
+            df.columns = [c.strip().lower().replace(" ", "_") for c in df.columns]
 
             for c in df.columns:
                 if "gender" in c:
@@ -97,40 +100,51 @@ if nav.startswith("🧹"):
                 else:
                     df[c] = df[c].astype(str).map(clean_text_cell)
                     num = to_numeric_smart(df[c])
-                    if num.notna().sum() > len(num)*0.5:
+                    if num.notna().sum() > len(num) * 0.5:
                         df[c] = num.fillna(num.median())
 
         st.success("🎉 Cleaning complete!")
         st.dataframe(df.head(10), use_container_width=True)
 
+        # --- Save Cleaned File ---
         os.makedirs("artifacts", exist_ok=True)
-        path = f"artifacts/cleaned_{os.path.splitext(uploaded.name)[0]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-        df.to_csv(path, index=False)
-        df.to_csv("artifacts/cleaned_latest.csv", index=False)
-        st.session_state["df_clean"] = df
-        st.session_state["clean_path"] = path
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        clean_filename = f"artifacts/cleaned_{os.path.splitext(uploaded.name)[0]}_{ts}.csv"
+        latest_filename = "artifacts/cleaned_latest.csv"
+        df.to_csv(clean_filename, index=False, encoding="utf-8")
+        df.to_csv(latest_filename, index=False, encoding="utf-8")
 
+        # --- Publish a public link to this latest file ---
+        PUBLIC_DATA_URL = "https://reason-ai-app-u6jlsdnvxpz8u5yvsvittx.streamlit.app/artifacts/cleaned_latest.csv"
+        st.session_state["public_data_url"] = PUBLIC_DATA_URL
+
+        st.success("✅ Cleaned file saved and `cleaned_latest.csv` updated for API backend.")
+        st.caption(f"🌐 Public dataset link: {PUBLIC_DATA_URL}")
+
+        # Store session data
+        st.session_state["df_clean"] = df
+        st.session_state["clean_path"] = clean_filename
+
+        # --- Download Button ---
         st.download_button("⬇️ Download Cleaned Dataset",
                            data=df.to_csv(index=False).encode("utf-8"),
                            file_name=f"cleaned_{uploaded.name}",
                            mime="text/csv")
 
-        st.info("✅ Cleaned file saved and `cleaned_latest.csv` updated for API backend.")
-
         # ---------- NeuralSeek Console Upload ----------
         st.markdown("### 🔗 NeuralSeek Console Integration")
         inst = st.text_input("NeuralSeek Instance ID",
-                             value=st.session_state.get("instance_id","e4826687b7e8c357dfcd1b18"))
-        key  = st.text_input("NeuralSeek API Key",
-                             type="password",
-                             value=st.session_state.get("api_key",""))
+                             value=st.session_state.get("instance_id", "e4826687b7e8c357dfcd1b18"))
+        key = st.text_input("NeuralSeek API Key",
+                            type="password",
+                            value=st.session_state.get("api_key", ""))
 
         if st.button("🚀 Send Cleaned CSV to NeuralSeek"):
             try:
                 url = f"https://consoleapi-usw.neuralseek.com/{inst}/exploreUpload"
-                headers = {"accept":"*/*","apikey":key}
-                with open(st.session_state["clean_path"],"rb") as f:
-                    files = {"file":(os.path.basename(st.session_state["clean_path"]),f,"text/csv")}
+                headers = {"accept": "*/*", "apikey": key}
+                with open(st.session_state["clean_path"], "rb") as f:
+                    files = {"file": (os.path.basename(st.session_state["clean_path"]), f, "text/csv")}
                     r = requests.post(url, headers=headers, files=files, timeout=120)
                 r.raise_for_status()
                 st.success("✅ Uploaded successfully — check mAIstro → Use Document.")
@@ -158,17 +172,18 @@ elif nav.startswith("📊"):
                     return c
             return None
 
-        doctor = find_first("doctor","physician","consultant")
-        clinic = find_first("clinic","ward","department")
-        fee = find_first("fee","amount","charge","bill")
-        date = find_first("date","admission","discharge","visit")
-        gender = find_first("gender","sex")
+        doctor = find_first("doctor", "physician", "consultant")
+        clinic = find_first("clinic", "ward", "department")
+        fee = find_first("fee", "amount", "charge", "bill")
+        date = find_first("date", "admission", "discharge", "visit")
+        gender = find_first("gender", "sex")
         age = find_first("age")
-        proc = find_first("procedure","treatment")
-        outcome = find_first("outcome","status","result")
+        proc = find_first("procedure", "treatment")
+        outcome = find_first("outcome", "status", "result")
 
         # Ensure fee numeric
-        if fee: df[fee] = to_numeric_smart(df[fee])
+        if fee:
+            df[fee] = to_numeric_smart(df[fee])
 
         CATALOG = []
         if doctor: CATALOG.append(("Top doctors by patient count",
@@ -184,22 +199,26 @@ elif nav.startswith("📊"):
         if gender: CATALOG.append(("Gender distribution",
             lambda: ("Gender distribution", df[gender].value_counts(), "pie")))
 
-        titles = [t for t,_ in CATALOG]
+        titles = [t for t, _ in CATALOG]
         sel = st.selectbox("Choose a question:", titles)
         ask = st.button("🧩 Ask Question")
         viz = st.button("📈 Visualize Answer")
 
         if ask:
             ans, data, kind = dict(CATALOG)[sel]()
-            st.session_state["ans"]=ans;st.session_state["data"]=data;st.session_state["kind"]=kind
+            st.session_state["ans"] = ans
+            st.session_state["data"] = data
+            st.session_state["kind"] = kind
             st.success(f"**Answer:** {ans}")
 
         if viz and "data" in st.session_state:
-            data=st.session_state["data"]; kind=st.session_state["kind"]; title=sel
-            fig, ax = plt.subplots(figsize=(8,4))
-            if kind=="bar": data.plot(kind="bar", ax=ax)
-            elif kind=="line": data.plot(ax=ax)
-            elif kind=="pie": ax.pie(data.values, labels=data.index, autopct="%1.1f%%")
+            data = st.session_state["data"]
+            kind = st.session_state["kind"]
+            title = sel
+            fig, ax = plt.subplots(figsize=(8, 4))
+            if kind == "bar": data.plot(kind="bar", ax=ax)
+            elif kind == "line": data.plot(ax=ax)
+            elif kind == "pie": ax.pie(data.values, labels=data.index, autopct="%1.1f%%")
             st.pyplot(fig, use_container_width=True)
 
 
@@ -209,13 +228,13 @@ elif nav.startswith("📊"):
 else:
     st.markdown("### ⚙️ App Settings")
     instance_id = st.text_input("Default NeuralSeek Instance ID",
-                                value=st.session_state.get("instance_id",""))
+                                value=st.session_state.get("instance_id", ""))
     api_key = st.text_input("Default NeuralSeek API Key",
                             type="password",
-                            value=st.session_state.get("api_key",""))
+                            value=st.session_state.get("api_key", ""))
     if st.button("💾 Save Settings"):
-        st.session_state["instance_id"]=instance_id
-        st.session_state["api_key"]=api_key
+        st.session_state["instance_id"] = instance_id
+        st.session_state["api_key"] = api_key
         st.success("✅ Settings saved for this session.")
 
 st.markdown("<hr><center>💡 Developed by <b>Favour Ezeofor</b> — Reason AI</center>",
