@@ -1,100 +1,123 @@
-# ================================================
-# 🟧 Reason AI Backend API for NeuralSeek
-# FastAPI endpoint that answers REST queries
-# Reads artifacts/cleaned_latest.csv from Streamlit
-# ================================================
+# ================================================================
+#  Reason AI - Backend API Service (FastAPI)
+#  Connects the Streamlit Data Cleaner with NeuralSeek REST nodes
+#  Developed by Favour Ezeofor | Maintained by Anim (Crown Dev)
+# ================================================================
+
 from fastapi import FastAPI, Query
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import JSONResponse
 import pandas as pd
-import numpy as np
-import os
+import requests
+import io
 
-app = FastAPI(title="Reason AI API", version="1.0.0")
+# ------------------------------------------------------------
+# 🔗 1. Initialize FastAPI app
+# ------------------------------------------------------------
+app = FastAPI(
+    title="Reason AI Backend",
+    description="FastAPI service for Reason AI – connects cleaned Streamlit dataset to NeuralSeek.",
+    version="2.0.0"
+)
 
-# ---------- Helper ----------
-def detect_numeric_series(s: pd.Series) -> bool:
-    from pandas.api.types import is_numeric_dtype
-    if is_numeric_dtype(s): return True
-    coerce = pd.to_numeric(s.dropna().astype(str).str.replace(",", ""), errors="coerce")
-    return (coerce.notna().mean() >= 0.7)
+# ------------------------------------------------------------
+# 📂 2. Streamlit app data source
+# ------------------------------------------------------------
+# This is the public link to your Reason AI Streamlit app
+STREAMLIT_DATA_URL = "https://reason-ai-app-u6jlsdnvxpz8u5yvsvittx.streamlit.app/artifacts/cleaned_latest.csv"
 
-def to_numeric_smart(s: pd.Series) -> pd.Series:
-    cleaned = (
-        s.astype(str)
-         .str.replace(r"[₦$,()% ]", "", regex=True)
-         .str.replace(r"[^\d\.\-eE]", "", regex=True)
-    )
-    return pd.to_numeric(cleaned, errors="coerce")
+# ------------------------------------------------------------
+# 🧩 3. Utility to load dataset dynamically
+# ------------------------------------------------------------
+def load_dataset():
+    try:
+        response = requests.get(STREAMLIT_DATA_URL, timeout=10)
+        response.raise_for_status()
+        df = pd.read_csv(io.StringIO(response.text))
+        return df
+    except Exception as e:
+        print("⚠️ Error loading dataset:", e)
+        return None
 
-def find_first(df, *keys):
-    cols = list(df.columns)
-    keys_low = [k.lower() for k in keys]
-    for c in cols:
-        cl = c.lower()
-        if any(k in cl for k in keys_low):
-            return c
-    return None
+# ------------------------------------------------------------
+# 💬 4. Root endpoint
+# ------------------------------------------------------------
+@app.get("/")
+def root():
+    return {
+        "status": "active",
+        "message": "✅ Reason AI API backend is live and ready.",
+        "usage": {
+            "example_query": "/query?q=Top%20doctors%20by%20patient%20count",
+            "data_source": STREAMLIT_DATA_URL
+        }
+    }
 
-# ---------- Core endpoint ----------
-@app.get("/query", response_class=PlainTextResponse)
-def query(q: str = Query(..., description="Question title from NeuralSeek")):
-    data_path = "artifacts/cleaned_latest.csv"
-    if not os.path.exists(data_path):
-        return "⚠️ No cleaned dataset available. Please run Streamlit app first."
-
-    df = pd.read_csv(data_path)
-    if df.empty:
-        return "⚠️ Dataset is empty."
-
-    doctor_col  = find_first(df, "doctor", "physician", "consultant")
-    clinic_col  = find_first(df, "clinic", "location", "ward", "department")
-    fee_col     = find_first(df, "fee", "amount", "charge", "bill", "cost", "price")
-    date_col    = find_first(df, "date", "admission", "discharge", "visit", "created")
-    gender_col  = find_first(df, "gender", "sex")
-    age_col     = find_first(df, "age")
-    outcome_col = find_first(df, "outcome", "status", "result")
-
-    if fee_col is not None:
-        try: df[fee_col] = to_numeric_smart(df[fee_col])
-        except Exception: pass
+# ------------------------------------------------------------
+# 🔍 5. Query endpoint for NeuralSeek and REST node
+# ------------------------------------------------------------
+@app.get("/query")
+def query_data(q: str = Query(..., description="Natural language query about the dataset")):
+    df = load_dataset()
+    if df is None:
+        return JSONResponse(
+            status_code=404,
+            content={"ok": False, "error": "No cleaned dataset available. Please run Streamlit app first."}
+        )
 
     q_lower = q.lower()
-    if "doctor" in q_lower:
-        if doctor_col:
-            vc = df[doctor_col].replace("Unknown", np.nan).dropna().value_counts()
-            if vc.empty: return "No doctor data."
-            return f"Total doctors: {vc.index.nunique()} | Top doctor: {vc.index[0]} ({int(vc.iloc[0])} records)"
-        return "Doctor column missing."
+    result = {}
 
-    if "clinic" in q_lower:
-        if clinic_col:
-            vc = df[clinic_col].replace("Unknown", np.nan).dropna().value_counts()
-            if vc.empty: return "No clinic data."
-            return f"Total clinics: {vc.index.nunique()} | Busiest clinic: {vc.index[0]} ({int(vc.iloc[0])} records)"
-        return "Clinic column missing."
+    try:
+        # Example intent recognition
+        if "doctor" in q_lower and "count" in q_lower:
+            top_doctors = df["doctor_name"].value_counts().head(5).to_dict()
+            result = {"query_type": "top_doctors_by_patient_count", "data": top_doctors}
 
-    if "revenue" in q_lower or "fee" in q_lower:
-        if date_col and fee_col:
-            d = pd.to_datetime(df[date_col].replace("Unknown", np.nan), errors="coerce")
-            tmp = pd.DataFrame({"month": d.dt.to_period("M").astype(str), "fee": df[fee_col]})
-            tmp = tmp.dropna()
-            gp = tmp.groupby("month")["fee"].sum().sort_index()
-            if gp.empty: return "No date/fee data."
-            return f"Revenue window: {gp.index.min()} → {gp.index.max()} | Peak month: {gp.idxmax()} (₦{gp.max():,.0f})"
-        return "Fee or date column missing."
+        elif "city" in q_lower or "location" in q_lower:
+            city_counts = df["city"].value_counts().head(5).to_dict()
+            result = {"query_type": "patients_by_city", "data": city_counts}
 
-    if "gender" in q_lower:
-        if gender_col:
-            vc = df[gender_col].replace("Unknown", np.nan).dropna().value_counts()
-            if vc.empty: return "No gender data."
-            return "Gender mix: " + ", ".join([f"{k}: {int(v)}" for k, v in vc.items()])
-        return "Gender column missing."
+        elif "disease" in q_lower:
+            disease_stats = df["disease"].value_counts().head(5).to_dict()
+            result = {"query_type": "common_diseases", "data": disease_stats}
 
-    if "age" in q_lower:
-        if age_col and detect_numeric_series(df[age_col]):
-            s = to_numeric_smart(df[age_col]).dropna()
-            if s.empty: return "No age data."
-            return f"Age — mean: {s.mean():.1f}, median: {s.median():.1f}, n={len(s)}"
-        return "Age column missing."
+        else:
+            result = {
+                "query_type": "dataset_summary",
+                "rows": len(df),
+                "columns": list(df.columns)
+            }
 
-    return "Unsupported question or columns missing."
+        return JSONResponse(
+            status_code=200,
+            content={
+                "ok": True,
+                "source": "Reason AI Streamlit dataset",
+                "response": result
+            }
+        )
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"ok": False, "error": f"Query processing failed: {str(e)}"}
+        )
+
+# ------------------------------------------------------------
+# 🧠 6. Health Check
+# ------------------------------------------------------------
+@app.get("/health")
+def health_check():
+    df = load_dataset()
+    return {
+        "status": "live",
+        "data_available": df is not None,
+        "message": "✅ Backend is running and ready for NeuralSeek integration."
+    }
+
+# ------------------------------------------------------------
+# ⚙️ 7. Server start command (Render uses this automatically)
+# ------------------------------------------------------------
+# Command used on Render:
+# uvicorn api_server:app --host 0.0.0.0 --port 10000
+# ------------------------------------------------------------
