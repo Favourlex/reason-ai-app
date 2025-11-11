@@ -1,123 +1,50 @@
-# ================================================================
-#  Reason AI - Backend API Service (FastAPI)
-#  Connects the Streamlit Data Cleaner with NeuralSeek REST nodes
-#  Developed by Favour Ezeofor | Maintained by Anim (Crown Dev)
-# ================================================================
+# ===========================================================
+# Reason AI Backend (API) – Data Hosting + Query Endpoint
+# ===========================================================
+from fastapi import FastAPI, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
+import pandas as pd, os
 
-from fastapi import FastAPI, Query
-from fastapi.responses import JSONResponse
-import pandas as pd
-import requests
-import io
+app = FastAPI(title="Reason AI API")
 
-# ------------------------------------------------------------
-# 🔗 1. Initialize FastAPI app
-# ------------------------------------------------------------
-app = FastAPI(
-    title="Reason AI Backend",
-    description="FastAPI service for Reason AI – connects cleaned Streamlit dataset to NeuralSeek.",
-    version="2.0.0"
-)
+DATA_DIR = "data"
+os.makedirs(DATA_DIR, exist_ok=True)
+LATEST_CSV = os.path.join(DATA_DIR, "cleaned_latest.csv")
 
-# ------------------------------------------------------------
-# 📂 2. Streamlit app data source
-# ------------------------------------------------------------
-# This is the public link to your Reason AI Streamlit app
-STREAMLIT_DATA_URL = "https://reason-ai-app-u6jlsdnvxpz8u5yvsvittx.streamlit.app/artifacts/cleaned_latest.csv"
-
-# ------------------------------------------------------------
-# 🧩 3. Utility to load dataset dynamically
-# ------------------------------------------------------------
-def load_dataset():
-    try:
-        response = requests.get(STREAMLIT_DATA_URL, timeout=10)
-        response.raise_for_status()
-        df = pd.read_csv(io.StringIO(response.text))
-        return df
-    except Exception as e:
-        print("⚠️ Error loading dataset:", e)
-        return None
-
-# ------------------------------------------------------------
-# 💬 4. Root endpoint
-# ------------------------------------------------------------
 @app.get("/")
 def root():
-    return {
-        "status": "active",
-        "message": "✅ Reason AI API backend is live and ready.",
-        "usage": {
-            "example_query": "/query?q=Top%20doctors%20by%20patient%20count",
-            "data_source": STREAMLIT_DATA_URL
-        }
-    }
+    return {"ok": True, "message": "Reason AI Backend is Live 👑"}
 
-# ------------------------------------------------------------
-# 🔍 5. Query endpoint for NeuralSeek and REST node
-# ------------------------------------------------------------
-@app.get("/query")
-def query_data(q: str = Query(..., description="Natural language query about the dataset")):
-    df = load_dataset()
-    if df is None:
-        return JSONResponse(
-            status_code=404,
-            content={"ok": False, "error": "No cleaned dataset available. Please run Streamlit app first."}
-        )
-
-    q_lower = q.lower()
-    result = {}
-
+@app.post("/upload_cleaned")
+async def upload_cleaned(file: UploadFile):
     try:
-        # Example intent recognition
-        if "doctor" in q_lower and "count" in q_lower:
-            top_doctors = df["doctor_name"].value_counts().head(5).to_dict()
-            result = {"query_type": "top_doctors_by_patient_count", "data": top_doctors}
-
-        elif "city" in q_lower or "location" in q_lower:
-            city_counts = df["city"].value_counts().head(5).to_dict()
-            result = {"query_type": "patients_by_city", "data": city_counts}
-
-        elif "disease" in q_lower:
-            disease_stats = df["disease"].value_counts().head(5).to_dict()
-            result = {"query_type": "common_diseases", "data": disease_stats}
-
-        else:
-            result = {
-                "query_type": "dataset_summary",
-                "rows": len(df),
-                "columns": list(df.columns)
-            }
-
-        return JSONResponse(
-            status_code=200,
-            content={
-                "ok": True,
-                "source": "Reason AI Streamlit dataset",
-                "response": result
-            }
-        )
-
+        contents = await file.read()
+        with open(LATEST_CSV, "wb") as f:
+            f.write(contents)
+        return {"ok": True, "message": "Cleaned dataset uploaded successfully."}
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"ok": False, "error": f"Query processing failed: {str(e)}"}
-        )
+        return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
-# ------------------------------------------------------------
-# 🧠 6. Health Check
-# ------------------------------------------------------------
-@app.get("/health")
-def health_check():
-    df = load_dataset()
-    return {
-        "status": "live",
-        "data_available": df is not None,
-        "message": "✅ Backend is running and ready for NeuralSeek integration."
-    }
+@app.get("/data/latest")
+def get_latest_data():
+    if not os.path.exists(LATEST_CSV):
+        return JSONResponse({"ok": False, "error": "No cleaned dataset uploaded yet."}, status_code=404)
+    return FileResponse(LATEST_CSV, media_type="text/csv")
 
-# ------------------------------------------------------------
-# ⚙️ 7. Server start command (Render uses this automatically)
-# ------------------------------------------------------------
-# Command used on Render:
-# uvicorn api_server:app --host 0.0.0.0 --port 10000
-# ------------------------------------------------------------
+@app.get("/query")
+def query(q: str):
+    if not os.path.exists(LATEST_CSV):
+        return {"ok": False, "error": "No cleaned dataset available."}
+    df = pd.read_csv(LATEST_CSV)
+    ql = q.lower()
+    if "doctor" in ql:
+        counts = df[df.columns[df.columns.str.contains("doctor", case=False)][0]].value_counts()
+        return {"ok": True, "response": {"Top doctor": counts.idxmax(), "Counts": counts.to_dict()}}
+    elif "clinic" in ql:
+        counts = df[df.columns[df.columns.str.contains("clinic|hospital", case=False)][0]].value_counts()
+        return {"ok": True, "response": {"Top clinic": counts.idxmax(), "Counts": counts.to_dict()}}
+    elif "gender" in ql:
+        counts = df[df.columns[df.columns.str.contains("gender|sex", case=False)][0]].value_counts()
+        return {"ok": True, "response": {"Gender distribution": counts.to_dict()}}
+    else:
+        return {"ok": True, "response": f"Query '{q}' received, but no direct logic matches yet."}
